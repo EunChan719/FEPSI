@@ -21,7 +21,7 @@ public class ResultDto {
 
     public ResultDto(String name, double value, double average) {
         this.name = name;
-        this.value = value;
+        this.value = Math.round((value) * 100) / 100.0;
         this.average = Math.round((average) * 100) / 100.0;
         this.result = (Math.round((value / average) * 10000) / 10000.0)*100;
         this.message = this.result <= 1

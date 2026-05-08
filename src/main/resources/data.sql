@@ -1,3 +1,3 @@
-INSERT INTO predict(motion,saturation, audio, emotion, ai_recall, dopamine_index) VALUES ('2.4', '3.5', '4.1','4.1', '6.4', '4.0');
-INSERT INTO predict(motion,saturation, audio, emotion, ai_recall, dopamine_index) VALUES ('3.2', '2.8', '1.5', '4.5', '7.4', '5.2');
-INSERT INTO predict(motion,saturation, audio, emotion, ai_recall, dopamine_index) VALUES ('3.2', '3.4', '9.4', '1.1', '3.8', '1.3');
+INSERT INTO predict(motion,saturation, audio, emotion, ai_recall, dopamine_index) VALUES ('24.94', '32.95', '44.78','35.61', '72.99', '44.98');
+INSERT INTO predict(motion,saturation, audio, emotion, ai_recall, dopamine_index) VALUES ('60', '29.36', '45.96', '26.28', '74.27', '58.1');
+INSERT INTO predict(motion,saturation, audio, emotion, ai_recall, dopamine_index) VALUES ('75.28', '32.88', '48.06', '17.42', '73.32', '51.4');
