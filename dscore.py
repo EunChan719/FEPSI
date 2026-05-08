@@ -1,153 +1,179 @@
+import torch
+import torch.nn as nn
 import cv2
 import numpy as np
 import librosa
 import os
 from deepface import DeepFace
+from moviepy.editor import VideoFileClip
+from transformers import AutoModel, AutoTokenizer, VideoMAEModel, VideoMAEImageProcessor
+
+# 1. AI 모델 구조 정의 (학습 시와 동일)
+class RecallPredictionModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.text_encoder = AutoModel.from_pretrained("bert-base-uncased")
+        self.video_encoder = VideoMAEModel.from_pretrained("MCG-NJU/videomae-base")
+        self.regressor = nn.Sequential(
+            nn.Linear(768 + 768, 256),
+            nn.ReLU(),
+            nn.Linear(256, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, text_ids, text_mask, video_pixel_values):
+        t_out = self.text_encoder(input_ids=text_ids, attention_mask=text_mask).last_hidden_state[:, 0, :]
+        v_out = self.video_encoder(video_pixel_values).last_hidden_state.mean(dim=1)
+        combined = torch.cat((t_out, v_out), dim=1)
+        return self.regressor(combined).squeeze()
 
 class DopamineAnalyzer:
-    def __init__(self, video_path, audio_path):
-        """
-        초기화 및 파일 경로 확인
-        """
+    def __init__(self, video_path, model_path="recall_model_optimized.pth"):
         self.video_path = video_path
-        self.audio_path = audio_path
+        self.audio_path = os.path.splitext(video_path)[0] + "_temp.mp3"
         
-        if not os.path.exists(video_path):
-            raise FileNotFoundError(f"비디오 파일을 찾을 수 없습니다: {video_path}")
-        if not os.path.exists(audio_path):
-            raise FileNotFoundError(f"오디오 파일을 찾을 수 없습니다: {audio_path}")
-            
-    def get_visual_score(self):
-        """
-        1. Optical Flow를 통한 실제 움직임 벡터 추출
-        2. 화면의 채도(Saturation) 분석
-        """
+        # 장치 설정 (MPS/CUDA/CPU)
+        self.device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+        
+        # AI 모델 및 프로세서 초기화
+        print(f"🤖 AI 모델 로딩 중... ({self.device})")
+        self.model = RecallPredictionModel().to(self.device)
+        if os.path.exists(model_path):
+            self.model.load_state_dict(torch.load(model_path, map_location=self.device))
+            print("✅ 학습된 가중치를 성공적으로 불러왔습니다.")
+        else:
+            print("⚠️ 가중치 파일을 찾을 수 없어 초기 상태로 분석합니다.")
+        self.model.eval()
+
+        self.tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+        self.feature_extractor = VideoMAEImageProcessor.from_pretrained("MCG-NJU/videomae-base")
+
+    def _extract_audio(self):
+        try:
+            video = VideoFileClip(self.video_path)
+            if video.audio is not None:
+                video.audio.write_audiofile(self.audio_path, logger=None)
+                return True
+            return False
+        except Exception: return False
+
+    # [AI Recall Score 계산 함수]
+    def get_ai_recall_score(self):
         cap = cv2.VideoCapture(self.video_path)
-        motion_scores = []
-        saturation_scores = []
+        frames = []
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total_frames <= 0: return 0.5
         
+        # 16프레임 추출
+        indices = np.linspace(0, total_frames - 1, 16).astype(int)
+        for idx in indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ret, frame = cap.read()
+            if ret:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frames.append(frame)
+        cap.release()
+
+        # 전처리 및 추론
+        video_inputs = self.feature_extractor(list(frames), return_tensors="pt").to(self.device)
+        text_inputs = self.tokenizer("A high-impact promotional video.", return_tensors="pt", padding=True, truncation=True).to(self.device)
+
+        with torch.no_grad():
+            prediction = self.model(text_inputs.input_ids, text_inputs.attention_mask, video_inputs.pixel_values)
+        
+       
+        return prediction.item() * 100
+
+    def get_visual_score(self):
+        cap = cv2.VideoCapture(self.video_path)
+        motion_scores, saturation_scores = [], []
         ret, prev_frame = cap.read()
-        if not ret: 
-            cap.release()
-            return 0, 0
-        
+        if not ret: return 0, 0
         prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
         count = 0
-        
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret: break
-            
             if count % 10 == 0:
                 curr_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 flow = cv2.calcOpticalFlowFarneback(prev_gray, curr_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
                 mag, _ = cv2.cartToPolar(flow[..., 0], flow[..., 1])
                 motion_scores.append(np.mean(mag))
-                
                 hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
                 saturation_scores.append(np.mean(hsv[:, :, 1]))
-                
                 prev_gray = curr_gray
             count += 1
-            
         cap.release()
-        
         m_score = min(100, np.mean(motion_scores) * 20) if motion_scores else 0
         s_score = min(100, (np.mean(saturation_scores) / 255) * 100) if saturation_scores else 0
-        
         return m_score, s_score
 
     def get_audio_score(self):
-        """
-        에너지 분석 로직을 로그 스케일(dB)로 수정하여 변별력 확보
-        """
         try:
-            sr = 22050
-            y, _ = librosa.load(self.audio_path, sr=sr)
-            
-            if len(y) == 0:
-                return 0
-            
-            # 1. 에너지(dB) 계산: 무작정 1000을 곱하는 대신 현실적인 데시벨 범위 사용
+            if not os.path.exists(self.audio_path): return 0
+            y, sr = librosa.load(self.audio_path, sr=22050)
             S = np.abs(librosa.stft(y))
             db = librosa.amplitude_to_db(S, ref=np.max)
-            avg_db = np.mean(db)
-            # 보통 음악의 평균 dB는 -40 ~ -10 사이입니다. 이를 0~100점으로 매핑
-            energy_idx = np.interp(avg_db, [-50, -5], [0, 100])
-            
-            # 2. 템포(BPM) 계산: 200 BPM을 100점 기준으로 정규화
+            energy_idx = np.interp(np.mean(db), [-50, -5], [0, 100])
             onset_env = librosa.onset.onset_strength(y=y, sr=sr)
-            tempo_list = librosa.feature.tempo(onset_envelope=onset_env, sr=sr)
-            tempo = tempo_list[0] if len(tempo_list) > 0 else 0
+            tempo = librosa.feature.tempo(onset_envelope=onset_env, sr=sr)[0]
             tempo_idx = min(100, (tempo / 200) * 100)
-            
-            # 3. 주파수 대비: 일반적인 음악 범위를 100점 기준으로 정규화
-            contrast = librosa.feature.spectral_contrast(y=y, sr=sr)
-            contrast_idx = min(100, np.mean(contrast) * 4) # 가중치 조정
-            
-            # 최종 합산 (에너지 40%, 템포 30%, 대비 30%)
-            final_audio_score = (energy_idx * 0.4 + tempo_idx * 0.3 + contrast_idx * 0.3)
-            return min(100, final_audio_score)
-
-        except Exception as e:
-            print(f"\n[오디오 분석 에러] 상세 에러: {e}")
-            return 0
+            contrast = np.mean(librosa.feature.spectral_contrast(y=y, sr=sr))
+            return min(100, (energy_idx * 0.4 + tempo_idx * 0.3 + (min(100, contrast * 4)) * 0.3))
+        except: return 0
 
     def get_emotion_score(self):
-        """
-        DeepFace를 이용한 각성도 분석
-        """
         cap = cv2.VideoCapture(self.video_path)
-        scores = []
-        count = 0
-        
+        scores, count = [], 0
         while cap.isOpened():
             ret, frame = cap.read()
             if not ret: break
-            
             if count % 60 == 0:
                 try:
                     res = DeepFace.analyze(frame, actions=['emotion'], enforce_detection=False, silent=True)
                     e = res[0]['emotion']
-                    # 각성 감정 합산
-                    arousal = (e['happy'] * 1.0) + (e['surprise'] * 0.8) + (e['fear'] * 0.5)
-                    scores.append(arousal)
-                except:
-                    pass
+                    scores.append((e['happy'] * 1.0) + (e['surprise'] * 0.8) + (e['fear'] * 0.5))
+                except: pass
             count += 1
-            
         cap.release()
         return np.mean(scores) if scores else 50.0
 
     def analyze(self):
-        print(f"--- 분석 시작: {os.path.basename(self.video_path)} ---")
+        has_audio = self._extract_audio()
         
+        print("🎬 비디오 분석 시작...")
         m_score, s_score = self.get_visual_score()
-        a_score = self.get_audio_score()
+        a_score = self.get_audio_score() if has_audio else 0
         e_score = self.get_emotion_score()
         
-        # 가중치: 움직임 30%, 채도 10%, 오디오 30%, 감정 30%
-        final_index = (m_score * 0.3) + (s_score * 0.1) + (a_score * 0.3) + (e_score * 0.3)
+        print("🧠 AI 리콜 점수 계산 중...")
+        r_score = self.get_ai_recall_score()
         
-        print("\n" + "="*40)
-        print(f"{'분석 항목':<20} | {'점수':>10}")
-        print("-" * 40)
-        print(f"{'1. Motion Velocity':<20} | {m_score:>10.2f}")
-        print(f"{'2. Visual Saturation':<20} | {s_score:>10.2f}")
-        print(f"{'3. Audio Stimulation':<20} | {a_score:>10.2f}")
-        print(f"{'4. Emotional Intensity':<20} | {e_score:>10.2f}")
-        print("-" * 40)
-        print(f"{'▶ 최종 도파민 지수':<20} | {final_index:>10.2f} / 100")
-        print("="*40)
+        # 최종 지수 계산 (리콜 점수 포함 가중치 조정)
+        final_index = (m_score * 0.2) + (s_score * 0.05) + (a_score * 0.25) + (e_score * 0.25) + (r_score * 0.25)
         
-        return final_index
+        if os.path.exists(self.audio_path): os.remove(self.audio_path)
+            
+        result = {
+            "dopamine_index": round(final_index, 2),
+            "details": {
+                "motion": round(m_score, 2),
+                "saturation": round(s_score, 2),
+                "audio": round(a_score, 2),
+                "emotion": round(e_score, 2),
+                "ai_recall": round(r_score, 2)
+            }
+        }
+        return result
 
 if __name__ == "__main__":
-    VIDEO_FILE = "king.mp4"
-    AUDIO_FILE = "kings.mp3"
-    
+    VIDEO_FILE = "test.mp4"
     try:
-        analyzer = DopamineAnalyzer(VIDEO_FILE, AUDIO_FILE)
-        analyzer.analyze()
+        analyzer = DopamineAnalyzer(VIDEO_FILE)
+        final_result = analyzer.analyze()
+        print("\n" + "="*50)
+        print(f"🚀 최종 도파민 지수: {final_result['dopamine_index']} / 100")
+        print(f"📊 상세 분석: {final_result['details']}")
+        print("="*50)
     except Exception as e:
-        print(f"실행 에러: {e}")
+        print(f"❌ 에러 발생: {e}")
