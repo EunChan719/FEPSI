@@ -21,4 +21,20 @@ public class Predict {
 	@Id
 	@GeneratedValue(strategy=GenerationType.IDENTITY)
 	private Long id;
+
+	private double motion;
+	private double saturation;
+	private double audio;
+	private double emotion;
+	private double dopamine_index;
+	
+	public Predict(double motion,double saturation, double audio, double emotion, double dopamine_index) {
+		this.motion = motion;
+		this.audio=audio;
+		this.saturation=saturation;
+		this.emotion=emotion;
+		this.dopamine_index=dopamine_index;
+	}
+	
+	
 }
