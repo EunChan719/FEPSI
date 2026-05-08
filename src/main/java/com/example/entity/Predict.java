@@ -26,6 +26,7 @@ public class Predict {
 	private double saturation;
 	private double audio;
 	private double emotion;
+	private double ai_recall;
 	private double dopamine_index;
 	
 	public Predict(double motion,double saturation, double audio, double emotion, double dopamine_index) {

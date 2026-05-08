@@ -20,4 +20,7 @@ public interface PredictRepository extends JpaRepository<Predict, Long> {
 
 	@Query("SELECT AVG(p.dopamine_index) FROM Predict p")
 	Double findDopamineIndexAverage();
+	
+	@Query("SELECT AVG(p.ai_recall) FROM Predict p")
+	Double findAiRecallAverage();
 }

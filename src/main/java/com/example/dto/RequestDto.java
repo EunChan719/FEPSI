@@ -14,15 +14,24 @@ import lombok.ToString;
 @NoArgsConstructor
 @AllArgsConstructor
 public class RequestDto {
-	private double motion;
-	private double saturation;
-	private double audio;
-	private double emotion;
-	private double dopamine_index;
-	public Predict toEntity(double dopamine_index) {
-		// TODO Auto-generated method stub
-		return new Predict(motion, saturation, audio, emotion, dopamine_index);
-	}
-	
-	
+
+	private String video_path;
+
 }
+
+
+//
+//
+//public class RequestDto {
+//	private double motion;
+//	private double saturation;
+//	private double audio;
+//	private double emotion;
+//	private double ai_recall;
+//	private double dopamine_index;
+//	
+//
+//	
+//	
+//
+//}

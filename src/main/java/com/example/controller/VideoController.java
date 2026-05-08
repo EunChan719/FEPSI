@@ -14,8 +14,21 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
+
+
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
+import org.springframework.web.client.RestTemplate;
+
 
 import com.example.dto.PredictResultDto;
 import com.example.dto.RequestDto;
@@ -45,10 +58,30 @@ public class VideoController {
 	@Autowired
 	private AiService aiService;
 	
+	@GetMapping("/test-ai")
+	@ResponseBody
+	public String testAi() {
+	    RestTemplate restTemplate = new RestTemplate();
+	    String url = "http://127.0.0.1:8000/docs";
+	    return "FastAPI 연결 시도 완료";
+	}
+	
 	@GetMapping("/videos")
 	public String uploadForm() {
 	    return "video/show";
 	}
+	
+	
+	@GetMapping("/api/test/videos")
+	@ResponseBody
+	public List<Predict> getTestVideos() {
+	    List<Predict> list = new ArrayList<>();
+	    predictRepository.findAll().forEach(list::add);
+	    return list;
+	}
+	
+	
+	
 	
 	@PostMapping("/videos")
 	public String show(@RequestParam("video") MultipartFile video, Model model) throws IOException  {
@@ -70,20 +103,109 @@ public class VideoController {
 	    File saveFile = new File(dir, fileName);
 
 	    video.transferTo(saveFile);
+	    
+	    RestTemplate restTemplate = new RestTemplate();
+	    String fastApiUrl = "http://127.0.0.1:8000/analyze";
+	    
+	    HttpHeaders headers = new HttpHeaders();
+	    headers.setContentType(MediaType.MULTIPART_FORM_DATA);
 
-	    model.addAttribute("message", "업로드 성공");
-	    model.addAttribute("path", saveFile.getAbsolutePath());
+	    MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+	    body.add("file", new FileSystemResource(saveFile));
+
+	    HttpEntity<MultiValueMap<String, Object>> requestEntity =
+	            new HttpEntity<>(body, headers);
+
+	    ResponseDto response = restTemplate.postForObject(
+	            fastApiUrl,
+	            requestEntity,
+	            ResponseDto.class
+	    );
+	    
+	    
+	    Predict predict = new Predict();
+
+	    predict.setMotion(response.getMotion());
+	    predict.setSaturation(response.getSaturation());
+	    predict.setAudio(response.getAudio());
+	    predict.setEmotion(response.getEmotion());
+	    predict.setAi_recall(response.getAi_recall());
+	    predict.setDopamine_index(response.getDopamine_index());
+
+	    Predict saved = predictRepository.save(predict);
+	    
+//	    return "redirect:/video/" + saved.getId();
+//
+//	    model.addAttribute("message", "업로드 성공");
+//	    model.addAttribute("path", saveFile.getAbsolutePath());
 
 		return "video/push";
 	}
 	
-	@PostMapping("/videos/create")
-	public String create(VideoDto dto) {
-		Video video = dto.toEntity();
-		Video created = videoRepository.save(video);
-		
-		return "redirect:/video/"+video.getId();
+	
+	
+	@PostMapping("/api/videos")
+	@ResponseBody
+	public ResponseDto analyzeVideo(@RequestParam("video") MultipartFile video) throws IOException {
+	    if (video.isEmpty()) {
+	        throw new RuntimeException("파일을 선택해주세요.");
+	    }
+
+	    String uploadDir = "C:/upload/";
+	    File dir = new File(uploadDir);
+
+	    if (!dir.exists()) {
+	        dir.mkdirs();
+	    }
+
+	    String fileName = "test.mp4";
+	    File saveFile = new File(dir, fileName);
+
+	    video.transferTo(saveFile);
+
+	    RestTemplate restTemplate = new RestTemplate();
+	    String fastApiUrl = "http://127.0.0.1:8000/analyze";
+
+	    HttpHeaders headers = new HttpHeaders();
+	    headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+
+	    MultiValueMap<String, Object> body = new LinkedMultiValueMap<>();
+	    body.add("file", new FileSystemResource(saveFile));
+
+	    HttpEntity<MultiValueMap<String, Object>> requestEntity =
+	            new HttpEntity<>(body, headers);
+
+	    ResponseDto response = restTemplate.postForObject(
+	            fastApiUrl,
+	            requestEntity,
+	            ResponseDto.class
+	    );
+
+	    Predict predict = new Predict();
+
+	    predict.setMotion(response.getMotion());
+	    predict.setSaturation(response.getSaturation());
+	    predict.setAudio(response.getAudio());
+	    predict.setEmotion(response.getEmotion());
+	    predict.setAi_recall(response.getAi_recall());
+	    predict.setDopamine_index(response.getDopamine_index());
+
+	    Predict saved = predictRepository.save(predict);
+	    response.setId(saved.getId());
+
+	    return response;
 	}
+	
+	
+	
+//	@PostMapping("/videos/create")
+//	public String create(VideoDto dto) {
+//		Video video = dto.toEntity();
+//		Video created = videoRepository.save(video);
+//		
+//		return "redirect:/video/"+video.getId();
+//	}
+	
 	
 	@GetMapping("/video/{id}") 
 	public String result(Model model,@PathVariable("id") Long id) {
@@ -95,6 +217,7 @@ public class VideoController {
 	    Double audioAverage = predictRepository.findAudioAverage();
 	    Double emotionAverage = predictRepository.findEmotionAverage();
 	    Double dopamineAverage = predictRepository.findDopamineIndexAverage();
+	    Double airecallAverage = predictRepository.findAiRecallAverage();
 
 	    PredictResultDto dto = new PredictResultDto(predict.getId());
 
@@ -102,12 +225,20 @@ public class VideoController {
 	    dto.addMetric("saturation", predict.getSaturation(), saturationAverage);
         dto.addMetric("audio", predict.getAudio(), audioAverage);
         dto.addMetric("emotion", predict.getEmotion(), emotionAverage);
-        dto.addMetric("dopamine_index", predict.getDopamine_index(), dopamineAverage);
+        dto.addMetric("Ai Recall", predict.getAi_recall(), airecallAverage);
+        dto.addMetric("Dopamine Index", predict.getDopamine_index(), dopamineAverage);
 
 
 	    model.addAttribute("dto",dto);
 		return "video/result";
 	}
+	
+	@GetMapping("/api/videos/{id}")
+	@ResponseBody
+	public Predict resultApi(@PathVariable("id") Long id) {
+	    return predictRepository.findById(id).orElse(null);
+	}
+	
 	
 	@GetMapping("/videos/list")
 	public String create(Model model) {        
@@ -118,6 +249,7 @@ public class VideoController {
 	    Double saturationAverage = predictRepository.findSaturationAverage();
 	    Double audioAverage = predictRepository.findAudioAverage();
 	    Double emotionAverage = predictRepository.findEmotionAverage();
+	    Double airecallAverage = predictRepository.findAiRecallAverage();
 	    Double dopamineAverage = predictRepository.findDopamineIndexAverage();
 
 		List<Predict> predictList = new ArrayList<>();
@@ -135,7 +267,8 @@ public class VideoController {
 		        dto.addMetric("saturation", predict.getSaturation(), saturationAverage);
 		        dto.addMetric("audio", predict.getAudio(), audioAverage);
 		        dto.addMetric("emotion", predict.getEmotion(), emotionAverage);
-		        dto.addMetric("dopamine_index", predict.getDopamine_index(), dopamineAverage);
+		        dto.addMetric("Ai Recall", predict.getAi_recall(), airecallAverage);
+		        dto.addMetric("Dopamine Index", predict.getDopamine_index(), dopamineAverage);
 
 		        resultList.add(dto);
 		    }
@@ -144,4 +277,11 @@ public class VideoController {
 		
 		return "video/list";
 	}
+	
+	@GetMapping("/api/videos")
+	@ResponseBody
+	public List<Predict> listApi() {
+	    return predictRepository.findAll();
+	}
+	
 }
